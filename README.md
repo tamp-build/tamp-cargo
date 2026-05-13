@@ -95,6 +95,27 @@ class Build : TampBuild
 | `Cargo.Update(...)` | `cargo update` | `-p <name>` for specific packages; `--dry-run` for preview. |
 | `Cargo.Raw(...)` | `cargo <anything>` | Escape hatch — `metadata`, `install`, `publish`, etc. |
 
+### Cargo.toml editing — `SetPackageVersion` / `GetPackageVersion` (0.2.0+)
+
+| Tamp method | What it does |
+|---|---|
+| `Cargo.SetPackageVersion(manifest, version)` | Writes `[package].version` directly via a built-in surgical TOML editor. Idempotent (no-op if already at target). **No `cargo-edit` plugin needed.** |
+| `Cargo.GetPackageVersion(manifest)` | Reads the same field. Returns `null` for workspace virtual manifests or `version.workspace = true` members. |
+
+```csharp
+Target StampVersion => _ => _
+    .Before(nameof(BuildService), nameof(BuildDesktop))
+    .Description("[Pack] Stamp version into all manifests before the build sees it")
+    .Executes(() =>
+    {
+        Cargo.SetPackageVersion(ServiceCrate / "Cargo.toml", Version);
+        Cargo.SetPackageVersion(SrcTauri    / "Cargo.toml", Version);
+        // Companion: Msix.SetAppxManifestVersion / Npm.SetVersion (when shipped)
+    });
+```
+
+The `.Before(...)` ordering is **load-bearing** when the cargo build embeds the version via `env!("CARGO_PKG_VERSION")` — without it, Tamp's scheduler can run the build before the stamp, producing binaries that report the OLD version inside a manifest stamped with the NEW one. The class of bug is silent unless adopters strings-grep the binary.
+
 ## The "workspace + features + target-triple" set
 
 Every build-like verb (`Build`, `Test`, `Check`, `Clippy`, `Run`, `Bench`, `Doc`) inherits a common selector set:

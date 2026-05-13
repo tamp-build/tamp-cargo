@@ -5,6 +5,69 @@ All notable changes to **Tamp.Cargo** are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — pending — typed package-version stamping (TAM-203)
+
+### Added
+
+- **`Cargo.SetPackageVersion(AbsolutePath manifest, string version)`** — write
+  the `[package].version` field of a Cargo.toml manifest directly, without
+  invoking `cargo set-version` (which requires the separate `cargo-edit`
+  plugin to be installed). Tamp ships a minimal surgical TOML editor that
+  touches only the version field and preserves every other byte of the
+  manifest: comments, whitespace, quote style, line endings, UTF-8 BOM.
+
+  ```csharp
+  Target StampVersion => _ => _
+      .Before(nameof(BuildService), nameof(BuildDesktop))
+      .Executes(() => Cargo.SetPackageVersion(ServiceCrate / "Cargo.toml", Version));
+  ```
+
+  **Idempotent by design** — if the version already matches, the file is
+  not rewritten (mtime unchanged). Safe to call repeatedly from CI retry
+  loops or inner-loop dev iterations.
+
+- **`Cargo.GetPackageVersion(AbsolutePath manifest)`** — symmetric reader,
+  returns `string?` (null when manifest has no `[package]` section, no
+  version field, or inherits via `version.workspace = true`).
+
+### Why
+
+DasBook canary friction batch #3 #6 (2026-05-13). `cargo set-version` is a
+`cargo-edit` plugin command, not a built-in. Adopters who naively call
+`Cargo.Raw(CargoBin, "set-version", ...)` get `cargo: no such command:
+'set-version'` with no hint about the separate crate. Shipping a native
+typed verb removes the cargo-edit prerequisite entirely.
+
+### Format-preservation contract
+
+- Whitespace before / between / after the `=`
+- Quote style (`"` or `'`) — preserved exactly
+- Inline comments on the version line — preserved
+- LF / CRLF line endings — preserved
+- UTF-8 BOM — preserved if present, not added if absent
+- Unicode content elsewhere in the manifest — preserved
+
+### Error cases
+
+Throws `InvalidOperationException` with a descriptive message:
+
+- Workspace virtual manifest (no `[package]` section)
+- Member crate using `version.workspace = true` (edit the workspace root)
+- `[package]` section with no `version` field
+
+Throws `ArgumentException` on null / whitespace / quote-bearing / newline-
+bearing version strings (prevents TOML-injection attempts).
+
+Throws `FileNotFoundException` on missing manifest paths.
+
+### Tests
+
+26 new tests in `CargoTomlEditorTests`: idempotency (mtime preserved),
+format preservation across line endings + quote styles + BOM + inline
+comments + Unicode content, error-path coverage for workspace virtual
+manifests + workspace inheritance + missing version field + invalid
+version strings, isolation (version field in [dependencies] not touched).
+
 ## [0.1.0] - 2026-05-13
 
 ### Added

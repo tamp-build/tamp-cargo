@@ -49,6 +49,62 @@ public static class Cargo
     public static CommandPlan Update(Tool tool, Action<CargoUpdateSettings>? configure = null)
         => Run<CargoUpdateSettings>(tool, configure);
 
+    /// <summary>
+    /// Read the <c>[package].version</c> field from a Cargo.toml manifest.
+    /// Returns <c>null</c> if the file has no <c>[package]</c> section (workspace
+    /// virtual manifest) or no <c>version</c> field, including the
+    /// <c>version.workspace = true</c> inheritance form.
+    /// </summary>
+    /// <remarks>
+    /// Cargo.toml editing in Tamp does NOT shell out to <c>cargo set-version</c>
+    /// (which requires the separate <c>cargo-edit</c> plugin and is non-trivial
+    /// to bootstrap). Instead we ship a minimal surgical TOML editor that
+    /// touches only the version field and preserves every other byte of the
+    /// manifest verbatim.
+    /// </remarks>
+    public static string? GetPackageVersion(AbsolutePath manifestPath)
+    {
+        if (manifestPath is null) throw new ArgumentNullException(nameof(manifestPath));
+        if (!File.Exists(manifestPath.Value)) return null;
+        return CargoTomlEditor.GetPackageVersion(File.ReadAllText(manifestPath.Value));
+    }
+
+    /// <summary>
+    /// Write <paramref name="version"/> into the <c>[package].version</c> field
+    /// of the Cargo.toml manifest at <paramref name="manifestPath"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Idempotent — if the version already matches, the file is not rewritten
+    /// (mtime unchanged). Safe to call repeatedly from a <c>StampVersion</c>
+    /// target without spurious failures.
+    /// </para>
+    /// <para>
+    /// Preserves all manifest formatting: comments, whitespace, quote style
+    /// (<c>"</c> or <c>'</c>), line endings (LF / CRLF / mixed), UTF-8 BOM.
+    /// Only the version value itself is replaced.
+    /// </para>
+    /// <para>
+    /// Replaces the <c>Cargo.Raw(CargoBin, "set-version", ...)</c> + <c>cargo-edit</c>
+    /// plugin path. No external dependencies — works on any toolchain with no
+    /// adopter setup.
+    /// </para>
+    /// </remarks>
+    /// <param name="manifestPath">Path to the Cargo.toml file.</param>
+    /// <param name="version">Semver version string (e.g. <c>"1.0.7"</c>).</param>
+    /// <exception cref="FileNotFoundException">Manifest file does not exist.</exception>
+    /// <exception cref="ArgumentException">Version is empty / whitespace / contains quote or newline characters.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Manifest has no <c>[package]</c> section (workspace virtual manifest),
+    /// the section uses workspace inheritance (<c>version.workspace = true</c>),
+    /// or the section has no <c>version</c> field.
+    /// </exception>
+    public static void SetPackageVersion(AbsolutePath manifestPath, string version)
+    {
+        if (manifestPath is null) throw new ArgumentNullException(nameof(manifestPath));
+        CargoTomlEditor.SetPackageVersion(manifestPath.Value, version);
+    }
+
     /// <summary>Raw escape hatch — for verbs the typed surface doesn't cover (e.g. <c>cargo install</c>, <c>cargo publish</c>, <c>cargo metadata</c>).</summary>
     public static CommandPlan Raw(Tool tool, params string[] arguments)
     {
