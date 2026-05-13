@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <RootNamespace>Tamp.Cargo</RootNamespace>
+    <AssemblyName>Tamp.Cargo</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package">
+    <PackageId>Tamp.Cargo</PackageId>
+    <Description>Wrapper for the cargo CLI — the Rust toolchain build driver. Verb surface mirrors Tamp.Yarn / Tamp.Npm conventions: Build, Test, Check, Clippy, Fmt, Run, Bench, Doc, Update, Raw. First-class target-triple, workspace member, and feature-flag handling for cross-compile + monorepo scenarios. Tamp.Core 1.5.0+ required for the InternalsVisibleTo grant.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(TampCorePath)" Condition="'$(TampCoreMode)' == 'project'" />
+    <PackageReference Include="Tamp.Core" Condition="'$(TampCoreMode)' == 'package'" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>
