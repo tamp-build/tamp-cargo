@@ -30,7 +30,7 @@ class Build : TampBuild
 {
     public static int Main(string[] args) => Execute<Build>(args);
 
-    [FromPath("cargo")] readonly Tool Cargo = null!;
+    [FromPath("cargo")] readonly Tool CargoBin = null!;
 
     AbsolutePath ServiceCrate => RootDirectory / "dasbook-service";
     AbsolutePath DesktopCrate => RootDirectory / "src-tauri";
@@ -39,12 +39,12 @@ class Build : TampBuild
         .Description("[CI gate] Fast type-check across both crates")
         .Executes(() => new[]
         {
-            Cargo.Check(s => s
+            Cargo.Check(CargoBin, s => s
                 .SetWorkingDirectory(ServiceCrate)
                 .SetWorkspace()
                 .SetAllTargets()
                 .SetLocked()),
-            Cargo.Check(s => s
+            Cargo.Check(CargoBin, s => s
                 .SetWorkingDirectory(DesktopCrate)
                 .SetWorkspace()
                 .SetAllTargets()
@@ -54,7 +54,7 @@ class Build : TampBuild
     Target BuildService => _ => _
         .DependsOn(nameof(CheckRust))
         .Description("[Build] dasbook-service release binary for the Tauri sidecar slot")
-        .Executes(() => Cargo.Build(s => s
+        .Executes(() => Cargo.Build(CargoBin, s => s
             .SetWorkingDirectory(ServiceCrate)
             .SetRelease()
             .SetTarget("x86_64-pc-windows-msvc")  // sidecar contract requires the suffix
@@ -62,18 +62,18 @@ class Build : TampBuild
 
     Target Clippy => _ => _
         .Description("[CI gate] Lint with warnings-as-errors")
-        .Executes(() => Cargo.Clippy(s => s
+        .Executes(() => Cargo.Clippy(CargoBin, s => s
             .SetWorkspace()
             .SetAllTargets()
             .SetDenyWarnings()));
 
     Target FmtCheck => _ => _
         .Description("[CI gate] rustfmt --check")
-        .Executes(() => Cargo.Fmt(s => s.SetAll().SetCheck()));
+        .Executes(() => Cargo.Fmt(CargoBin, s => s.SetAll().SetCheck()));
 
     Target Test => _ => _
         .DependsOn(nameof(BuildService))
-        .Executes(() => Cargo.Test(s => s
+        .Executes(() => Cargo.Test(CargoBin, s => s
             .SetWorkingDirectory(ServiceCrate)
             .SetWorkspace()
             .SetLocked()));
@@ -84,7 +84,7 @@ class Build : TampBuild
 
 | Tamp method | cargo command | Notes |
 |---|---|---|
-| `Cargo.Build(...)` | `cargo build` | `--release`, `--target`, `--features`, `--workspace`, `-p`, `--bin`, `--example`, `--lib`, `--all-targets`, `--target-dir`. |
+| `Cargo.Build(...)` | `cargo build` | `--release` / `--profile <name>` (mutually exclusive), `--target`, `--features`, `--workspace`, `-p`, `--bin`, `--example`, `--lib`, `--all-targets`, `--target-dir`. |
 | `Cargo.Test(...)` | `cargo test [filter] [-- args]` | `--no-run` for compile/run CI split; `--doc` for doc-tests only; test-binary args forwarded after `--`. |
 | `Cargo.Check(...)` | `cargo check` | Fast type-check without codegen. The recommended pre-build CI gate. |
 | `Cargo.Clippy(...)` | `cargo clippy` | `SetDenyWarnings()` adds `-- -D warnings` for the CI gate. `--fix` + `--allow-dirty` for in-place corrections. |
@@ -113,7 +113,7 @@ When a Rust binary feeds a downstream packaging step (Tauri externalBin, MSIX si
 
 ```csharp
 // Tauri's externalBin contract: <name>-<target-triple>(.exe)
-Cargo.Build(s => s
+Cargo.Build(CargoBin, s => s
     .SetWorkingDirectory(ServiceCrate)
     .SetRelease()
     .SetTarget("x86_64-pc-windows-msvc"));   // produces target/x86_64-pc-windows-msvc/release/dasbook-service.exe
@@ -121,6 +121,41 @@ Cargo.Build(s => s
 // Adopter-side: copy or rename to the externalBin slot.
 // (Tauri 2's CLI also does this dance via tauri.conf.json — covered by Tamp.Tauri.V2 in a future wave.)
 ```
+
+## Build profiles — `SetRelease()` vs `SetProfile("...")`
+
+The two profile selectors are mutually exclusive and validated at `ToCommandPlan` time:
+
+- `SetRelease()` — `cargo build --release` (the built-in `release` profile).
+- `SetProfile("name")` — `cargo build --profile <name>` for a custom profile defined in `Cargo.toml`'s `[profile.<name>]` block (e.g. `fast-release`, `dist`, `bench-only`).
+
+Use `SetProfile` whenever the project defines anything other than the stock `dev`/`release` profiles. Driving it from a build parameter keeps the profile name in one place:
+
+```csharp
+class Build : TampBuild
+{
+    public static int Main(string[] args) => Execute<Build>(args);
+
+    [FromPath("cargo")] readonly Tool CargoBin = null!;
+
+    // Override at the CLI: dotnet tamp BuildService --cargo-profile fast-release
+    [Parameter] readonly string? CargoProfile;
+
+    AbsolutePath ServiceCrate => RootDirectory / "dasbook-service";
+
+    Target BuildService => _ => _
+        .Executes(() => Cargo.Build(CargoBin, s =>
+        {
+            s.SetWorkingDirectory(ServiceCrate)
+             .SetTarget("x86_64-pc-windows-msvc")
+             .SetLocked();
+            if (CargoProfile is not null) s.SetProfile(CargoProfile);
+            else                          s.SetRelease();
+        }));
+}
+```
+
+Setting both `SetRelease()` and `SetProfile("...")` on the same settings instance throws `InvalidOperationException` at plan time — fail-fast, before the slow tool launches.
 
 ## Reproducibility flags
 
@@ -133,7 +168,7 @@ For local dev: leave both off.
 Per-invocation env vars chain via `SetEnvironmentVariable(name, value)`. Useful for `RUSTFLAGS`, `CARGO_TERM_COLOR`, `CARGO_BUILD_JOBS`, etc.:
 
 ```csharp
-Cargo.Build(s => s
+Cargo.Build(CargoBin, s => s
     .SetEnvironmentVariable("RUSTFLAGS", "-C target-cpu=native")
     .SetEnvironmentVariable("CARGO_TERM_COLOR", "always")
     .SetRelease());
@@ -144,7 +179,7 @@ Cargo.Build(s => s
 For verbs not yet typed (`cargo install`, `cargo publish`, `cargo metadata`, custom subcommands like `cargo-deny`):
 
 ```csharp
-var plan = Cargo.Raw(Cargo, "metadata", "--format-version=1", "--no-deps");
+var plan = Cargo.Raw(CargoBin, "metadata", "--format-version=1", "--no-deps");
 ```
 
 File a TAM ticket if you reach for `Raw` frequently — the typed surface should grow to cover real adopter needs.
